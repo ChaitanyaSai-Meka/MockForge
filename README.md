@@ -2,7 +2,7 @@
 
 MockForge is a developer-focused web application for creating persistent mock REST API endpoints without writing backend code. Users manage projects and JSON responses in a protected dashboard, while generated mock URLs remain publicly callable by frontend applications.
 
-Phases 1–3 implement Supabase SSR authentication, owner-protected project/endpoint management, JSON configuration, a responsive dashboard, and public mock serving. Generated URLs now return their database-backed JSON and configured status. Request logging and inspection follow in Phase 4; mock calls do not populate request history or increase recorded-request counts yet.
+The four-phase MVP includes Supabase SSR authentication, owner-protected project/endpoint management, JSON configuration, public mock serving, and private request inspection. Generated URLs return their database-backed JSON/status and record minimal request metadata. The dashboard shows real counts and recent calls, with endpoint filters and paginated history.
 
 ## Architecture
 
@@ -14,11 +14,13 @@ flowchart LR
   UserClient --> RLS[Owner-scoped RLS]
   PublicClient[Frontend application] --> Runtime[Public mock route handler]
   Runtime --> Admin[Server-only administrative client]
-  Admin --> DB[(PostgreSQL endpoint configuration)]
+  Runtime --> After[After-response log writer]
+  After --> Admin
+  Admin --> DB[(PostgreSQL configuration and logs)]
   RLS --> DB
 ```
 
-The dashboard uses cookie-based Supabase sessions and verifies the current user on the server before rendering private content or querying workspace data. Normal data access uses the authenticated client and remains constrained by PostgreSQL RLS. The public runtime uses the service role only inside server code to resolve the requested project and endpoint, returning only its configured response. Request logging is not implemented yet.
+The dashboard uses cookie-based Supabase sessions and verifies the current user on the server before rendering private content or querying workspace data. Normal data access uses the authenticated client and remains constrained by PostgreSQL RLS. The public runtime uses the service role only inside server code to resolve the requested project/endpoint and insert bounded request metadata. Next.js `after` keeps log writes alive after sending the configured response, including on Vercel; failed logging never replaces that response.
 
 `proxy.ts` refreshes sessions on dashboard and authentication pages and preserves Supabase's refreshed cookies and cache headers. Authenticated responses are not publicly cached. Public pages work without Supabase configuration; auth pages show a setup notice and disable submission until configuration is present. Server and administrative clients use `server-only` guards so they cannot be imported into browser components.
 
@@ -74,7 +76,7 @@ The dashboard uses cookie-based Supabase sessions and verifies the current user 
    - `supabase/migrations/20261023090000_foundation_hardening.sql`
    - `supabase/migrations/20261023120000_endpoint_configuration.sql`
 
-   Run only migrations you have not already applied. If Phase 1 is set up, only the third migration is new. It preserves JSON `null` values sent through PostgREST and adds canonical path validation. Correct any existing noncanonical paths before applying it. The hardening migration requires existing endpoints to use statuses 200–599 and JSON within 64 KiB. **Phase 3 needs no additional migration** if all three files are already applied.
+   Run only migrations you have not already applied. If Phase 1 is set up, only the third migration is new. It preserves JSON `null` values sent through PostgREST and adds canonical path validation. Correct any existing noncanonical paths before applying it. The hardening migration requires existing endpoints to use statuses 200–599 and JSON within 64 KiB. **Phases 3 and 4 need no additional migration** if all three files are already applied; the existing request-log table, index, and RLS policies support history.
 
 5. Configure authentication in **Supabase Dashboard → Authentication → URL Configuration**:
 
@@ -119,16 +121,16 @@ RLS is enabled on every application table:
 - No browser-facing role can insert, update, or delete request logs, or truncate any application table.
 - Anonymous users have no application-table privileges; no anonymous management policies exist.
 
-Endpoint responses are bounded to 64 KiB of JSONB text and final HTTP statuses 200–599. The runtime omits the response body for 204, 205, and 304 statuses. Query-parameter logs are bounded to 8 KiB. Secret filtering belongs in the Phase 4 log writer; JSONB storage alone does not redact secrets.
+Endpoint responses are bounded to 64 KiB of JSONB text and final HTTP statuses 200–599. The runtime omits the response body for 204, 205, and 304 statuses. The database bounds query-parameter logs to 8 KiB; the runtime's conservative allowlist produces less than 128 bytes. JSONB storage alone does not redact secrets.
 
-The public mock engine uses a server-only administrative client, which bypasses RLS for scoped runtime lookups. It does not inherit the caller's authorization headers or cookies. Anyone with an active mock URL can read its response; never save secrets in response JSON.
+The public mock engine uses a server-only administrative client, which bypasses RLS for scoped runtime lookups and log inserts. It does not inherit the caller's authorization headers or cookies. Anyone with an active mock URL can read its response; never save secrets in response JSON or endpoint paths.
 
 ## Project and endpoint management
 
 - `/dashboard/projects`: paginated project list and project creation.
 - `/dashboard/projects/[projectId]`: project details, URL prefix, endpoints, editing, and confirmed deletion.
 - `/dashboard/projects/[projectId]/endpoints/new`: method, path, status, active state, and JSON response configuration.
-- `/dashboard/projects/[projectId]/endpoints/[endpointId]`: saved response preview, URL/JSON copying, edit, enable/disable, and confirmed deletion.
+- `/dashboard/projects/[projectId]/endpoints/[endpointId]`: saved response preview, URL/JSON copying, paginated history, edit, enable/disable, and confirmed deletion.
 - `/dashboard/endpoints`: paginated endpoint list across the owner's projects.
 
 Server Actions verify the authenticated user and constrain project mutations by owner. Every endpoint mutation first verifies the parent project and includes both project and endpoint IDs in its filters. All normal operations use the authenticated client, with RLS as an additional boundary. Unique constraints handle concurrent slug and method/path conflicts; visitors see inline errors rather than database details. Deleting a project also deletes its endpoints and request logs; both deletion forms require the current slug or method/path and verify that confirmation on the server.
@@ -137,7 +139,7 @@ Shared Zod schemas validate forms in the browser and on the server. Project slug
 
 JSON responses can be objects, arrays, strings, booleans, numbers, or `null`. Validation rejects NUL characters, malformed Unicode, non-finite numbers, unsafe integers (store large IDs as strings), nesting beyond 64 levels, and payloads larger than 64 KiB. The third migration converts PostgREST's SQL NULL representation into JSONB `null` before the column's NOT NULL check. HTTP 204, 205, and 304 keep the saved JSON for later edits, but their runtime responses have no body.
 
-URL previews use the canonical `NEXT_PUBLIC_SITE_URL`, project slug, and normalized path. Saved active endpoints are publicly callable; inactive ones return 404. The UI marks request history as forthcoming and does not fabricate request activity.
+URL previews use the canonical `NEXT_PUBLIC_SITE_URL`, project slug, and normalized path. Saved active endpoints are publicly callable; inactive ones return 404. History and counts come from persisted request logs; no activity is fabricated.
 
 ## Public mock runtime
 
@@ -184,7 +186,29 @@ Runtime-generated errors have a consistent shape (user-configured error response
 
 The request parser rejects percent-encoded aliases in paths. CORS header-name lists are limited to 2,048 characters and 32 entries. Next.js, browsers, or the hosting layer may normalize malformed paths (including repeated slashes/dot segments) or reject unsupported methods such as TRACE/CONNECT before the route handler; those upstream responses are outside its JSON/CORS guarantees. Always use the generated canonical URL.
 
-Implementation is split into the thin `app/mock/[[...segments]]/route.ts` adapter, `lib/mock/request.ts` validation, `lib/mock/handler.ts` HTTP behavior, and `lib/mock/store.ts` database queries. Database/provider errors are never returned to callers; the server emits only a constant failure diagnostic. No incoming request headers, body, or query values are persisted by the runtime. Request logging and inspection remain Phase 4.
+Implementation is split into the thin `app/mock/[[...segments]]/route.ts` adapter, `lib/mock/request.ts` validation, `lib/mock/handler.ts` HTTP behavior, `lib/mock/logging.ts` safe metadata/scheduling, and `lib/mock/store.ts` database queries. Database/provider errors are never returned to callers; runtime diagnostics contain no request or provider details.
+
+## Request logging and inspector
+
+- `/dashboard/activity`: newest-first history across your endpoints, an endpoint filter, manual refresh, and 12-record pages. Pagination preserves the filter. The picker lists 50 recently updated endpoints plus the current selection; every endpoint's own detail page links directly to its full history, including endpoints outside that picker.
+- `/dashboard/activity/[requestId]`: method, requested path, actual response status, response-preparation time, received timestamp, and retained query metadata, with a copy-JSON action.
+- Endpoint details show paginated endpoint-specific history. The overview shows recorded-request totals and the five most recent calls. Use Refresh after making new requests; there is no polling or realtime subscription.
+- All history reads use the authenticated Supabase client, explicit ownership filters, and RLS. Another user's request ID or endpoint-filter URL shows the same unavailable state as a missing item. Browsers cannot insert, update, or delete logs, even for their own endpoints.
+
+The runtime records exact configured-method calls, including configured error/bodyless statuses and disabled-endpoint 404s. It also attempts to record a 503 if a configuration error occurs after an endpoint was resolved. Unknown projects/paths, invalid requests, wrong methods, HEAD, and OPTIONS are not recorded: they have no matching configured endpoint, and logs are never assigned to a different method arbitrarily. Counts represent **recorded calls**, not all network traffic.
+
+The log contains the endpoint ID, method, canonical full mock path (without host or query), status, received UTC timestamp, elapsed preparation time, and safe query metadata. Path/status/method are snapshots; later configuration edits do not rewrite them. Timing includes database lookup and response creation, excluding network delivery and the after-response log write.
+
+Privacy defaults are deliberately conservative:
+
+- Headers, authorization values, cookies, IP addresses, user agents, and request/response bodies are not stored.
+- Only lowercase `page`, `limit`, and `offset` containing an integer from 0–9,999,999 without leading zeros, and `order=asc|desc`, are retained as strings.
+- Duplicate keys, unsupported parameters, malformed values, and all free-form query values are omitted—not merely filtered by a secret-name denylist. `category=books`, search text, tokens, and arbitrary custom fields do not appear in history. Do not put sensitive data in the small set of retained fields or in configured endpoint paths.
+- No raw URL or provider error is included in application diagnostics. Hosting/proxy access logs are separate: review their retention/redaction settings, and never put credentials in URLs.
+
+For example, `?page=2&limit=20&order=asc&token=secret&category=books` stores only `{"page":"2","limit":"20","order":"asc"}`.
+
+Writes run through Next.js `after`, have a three-second database timeout, and emit only `MockForge request logging failed.` on failure. Logging is best-effort and can lag the response; failures never change the configured response. If an endpoint is deleted before its pending log is inserted, the foreign key rejects the write safely. No retries or durable queue are used. Deleting an endpoint/project/user cascades its logs; otherwise they remain until an operator applies a retention policy. There is no automatic purge or per-call rate limit in this MVP.
 
 ## Demo data
 
@@ -207,7 +231,7 @@ npm test
 npm run build
 ```
 
-The Vitest suite covers auth, configuration, JSON/path validation, method/status validation, duplicate handling, deletion confirmation, mutation ownership checks, and runtime routing/responses/CORS/errors/cache behavior. Runtime store tests verify bounded, project-scoped queries and timeout signals. It mocks Supabase and does not establish live database behavior. Use `npm run test:watch` during development.
+The Vitest suite covers auth, configuration, JSON/path validation, method/status validation, duplicate handling, deletion confirmation, mutation ownership checks, runtime routing/responses/CORS/errors/cache behavior, log privacy/duration/failure handling, and owner-scoped history pagination/detail queries. Store tests verify bounded queries and timeout signals. It mocks Supabase and does not establish live database behavior. Use `npm run test:watch` during development.
 
 ### Live browser and RLS checks
 
@@ -226,7 +250,7 @@ All three migrations are required for the runtime suite. Enable the additional m
 MOCKFORGE_PHASE2_MIGRATION_APPLIED=true npm run test:e2e
 ```
 
-Without that flag, this one test is explicitly skipped. Browser screenshots of test endpoint pages are stored in gitignored `test-results/`.
+Without that flag, this one test is explicitly skipped. The Phase 4 history test creates two temporary users, calls real mock URLs, checks persisted safe metadata and counts, exercises filtering/pagination/refresh/detail/copy/mobile UI, verifies log-write restrictions and cross-user isolation, and confirms deletion cascades. It cleans up only its fixture accounts and data. Browser screenshots of test endpoint/activity pages are stored in gitignored `test-results/`.
 
 `supabase/tests/rls.sql` exercises real database policies for two synthetic users: visibility, forged ownership, cross-user mutations, endpoint reassignment, log-write restrictions, anonymous access, non-RLS privileges, and cascading deletion. On a disposable/local Supabase database after migrations, run:
 
@@ -261,7 +285,7 @@ Alternatively, run the whole script as `postgres` in the SQL Editor of a disposa
 - On mobile, open the navigation and verify the sign-out control is reachable by keyboard.
 - Create a second user and verify that RLS prevents either account from reading the other's rows.
 
-The last RLS check can use the SQL suite or browser suite above. The user has manually verified live sign-up and authentication. Phase 3 adds runtime matching tests; request-history tests remain Phase 4.
+The last RLS check can use the SQL suite or browser suite above. The user has manually verified live sign-up and authentication. Phase 3 adds runtime matching tests; Phase 4 adds request-history tests.
 
 ## Phase 2 manual checklist
 
@@ -278,7 +302,7 @@ The last RLS check can use the SQL suite or browser suite above. The user has ma
 - Cancel a delete dialog with Escape, reject incorrect confirmation text, then delete a test endpoint/project with correct confirmation.
 - Confirm project deletion removes its endpoints and updates the dashboard/list counts.
 - Check forms, lists, and navigation on a narrow mobile viewport.
-- Call the generated URL using the Phase 3 checklist below; request history arrives in Phase 4.
+- Call the generated URL using the Phase 3 checklist below, then inspect history using the Phase 4 checklist.
 
 ## Phase 2 verification record — October 23, 2026
 
@@ -301,7 +325,7 @@ The last RLS check can use the SQL suite or browser suite above. The user has ma
 - Edit JSON/status and call the same URL again immediately; verify the new configuration. Change path/project slug and verify the old URL stops resolving that endpoint.
 - Delete a test endpoint/project and confirm its old public URLs return 404.
 - Recheck that another user cannot access the management configuration even though the configured mock response is public.
-- Request counts/history do not change yet; logging and the inspector are Phase 4.
+- Inspect recorded calls using the Phase 4 checklist below.
 
 ## Phase 3 verification record — October 23, 2026
 
@@ -317,17 +341,49 @@ The last RLS check can use the SQL suite or browser suite above. The user has ma
 
 ## Vercel deployment
 
-1. Import the repository into Vercel.
+1. Import the repository into Vercel with the Next.js preset and Node.js 24 LTS (or a supported Node.js 22 version meeting the local requirement).
 2. Add the public Supabase variables, site origin, and server-only runtime key from `.env.example` for the relevant environments.
 3. Set `NEXT_PUBLIC_SITE_URL` to the canonical deployment origin.
 4. Set Supabase Auth's Site URL to the production origin and add `https://your-domain/auth/callback` and `https://your-domain/auth/confirm` to its redirect URLs. Keep the confirmation email template consistent with the selected flow.
 5. Apply migrations to the production Supabase project before opening the dashboard.
+6. Rebuild after setting `NEXT_PUBLIC_` variables. Use a separate test Supabase project for preview deployments and live tests; avoid allowing arbitrary preview origins to become production confirmation URLs.
+7. The mock route uses the Node.js runtime and a 15-second `maxDuration`, allowing bounded lookups plus the background write. Keep Next.js `after` support enabled; do not replace it with an untracked promise or statically export this application.
+8. Decide whether Vercel Deployment Protection should permit public mock callers. Protected preview deployments will not behave like public mock URLs until access is configured. Never disable the application's dashboard authentication.
+9. After deployment, run the smoke checklist below. Confirm CORS from your actual frontend origin and inspect a newly created log. Deployment is a separate manual step; a successful local build is not proof of a successful Vercel deployment.
 
 Vercel can use the default Next.js build command, `npm run build`.
+
+Before broad public use, set a retention/storage budget for request logs, monitor Supabase/Vercel usage and the safe failure diagnostics, and configure platform-level abuse/rate controls as appropriate. The MVP has bounded inputs and queries, not a durable analytics pipeline or built-in traffic quotas. Run `npm audit --omit=dev` before release and keep the framework and Supabase clients updated. The development-tool audit findings documented in the Phase 1 record need separate upstream remediation.
+
+## Phase 4 / deployment smoke checklist
+
+- Sign up, confirm email, and log in on the intended hostname. Verify a signed-out visit to `/dashboard/activity` redirects to login.
+- Create a project and active GET endpoint, then call the generated URL with `?page=2&limit=20&token=do-not-store`. Confirm the configured response.
+- Refresh the endpoint page and Activity. Inspect its method, path, status, timestamp, duration, and query JSON; only `page` and `limit` should remain.
+- Call a POST endpoint with credentials in its body/headers; verify those values do not appear in stored logs. Do not use real secrets in tests.
+- Generate more than 12 calls, filter by endpoint, and navigate Next/Previous. Verify filters are preserved and Refresh updates counts/recent requests.
+- Edit the endpoint path/status. New calls should use the new configuration while earlier request details preserve their old path/status.
+- Disable a configured endpoint and call its configured method; verify a recorded 404. OPTIONS, HEAD, unknown paths, and wrong methods should not inflate counts.
+- Open request details and filtering URLs as another user; expect unavailable. Direct browser log inserts/updates/deletes must be denied for both users.
+- Check Activity, details, filter controls, copying, and mobile navigation at 320px and desktop sizes.
+- Delete a disposable endpoint/project; verify its logs disappear and old detail URLs show unavailable. This is a real cascade deletion; do not test on data you need.
+- From the deployed frontend origin, verify an OPTIONS preflight and public response. Check that the background log appears shortly afterward.
+- Review hosting logs for safe diagnostics, choose a retention/abuse policy, and verify production environment variables and Auth redirects before sharing public URLs.
+
+## Phase 4 verification record — October 23, 2026
+
+- Passed: ESLint, strict TypeScript checking, all 235 Vitest tests, and the production build used by Playwright. `npm audit --omit=dev` reported zero production vulnerabilities.
+- Passed together in the final live run: all four Playwright tests, with no skips. This includes existing management/authenticated-isolation, JSON `null`/database-path, and public-runtime/browser-CORS regression coverage.
+- Passed against Supabase: after-response logging, actual status/duration/path metadata, omitted secret headers/cookies/bodies/free-form query values, 204 and inactive-endpoint 404 logs, and no logs for unmatched methods/paths or preflights.
+- Passed in Chromium: endpoint history and refresh, overview counts/recent calls, endpoint filtering, Next/Previous with preserved filters, individual details, query-JSON copying, historical paths after edits, and desktop/320px layouts with mobile Activity navigation. Screenshots were reviewed; no browser runtime exceptions occurred in the history flow.
+- Passed with two authenticated users: cross-user log reads and inspector/filter URLs are blocked. Both owner and non-owner browser clients are denied log inserts, updates, and deletes. Endpoint/project deletion cascades the logs and makes old detail URLs unavailable.
+- Unit checks cover bounded query metadata/durations, history-query ownership/limits, insert and scheduler failures, and keeping the configured response unchanged when logging fails. Database outages were simulated, not induced against the live project. A safe logging-failure diagnostic also appeared during runtime tests that delete configurations while writes may be pending; configured responses and the full suite still passed.
+- Temporary test users and their disposable data were cleaned up after each run. No existing user-created projects were used or modified. Fixture data is recreated by the suite; its deletion is not reversible.
+- No migration or new dependency was required. Vercel deployment, production-domain/Auth redirect setup, and the standalone SQL RLS script were not executed in this phase. Deployment/retention/abuse-control decisions remain operator steps, documented above.
 
 ## Phase roadmap
 
 - **Phase 1 — implemented:** foundation, design system, auth, database migrations, landing page, protected dashboard shell, and auth regression tests. Live authentication verified by the user.
 - **Phase 2 — implemented and verified:** database-backed project and endpoint CRUD, shared validation, URL previews, endpoint details, confirmation dialogs, pagination, and management tests. The third migration is applied; live JSON `null` persistence and database path constraints are verified.
 - **Phase 3 — implemented and verified:** public catch-all mock runtime, fresh database lookups, exact matching, browser CORS, configured JSON/statuses, consistent errors, and unit/live runtime tests.
-- **Phase 4:** request logging and inspector, request-history tests, UX refinement, and deployment finalization.
+- **Phase 4 — implemented and verified:** after-response logging, privacy-bounded query metadata, private request inspector, endpoint filters/pagination, live counts/recent calls, responsive UI, unit/live history tests, and deployment documentation. All four implementation phases are complete; deployment itself is a separate step.

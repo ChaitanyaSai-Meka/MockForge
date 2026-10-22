@@ -1,12 +1,15 @@
+import { after } from "next/server";
 import { createMockHandler } from "@/lib/mock/handler";
 import { createRuntimeStore } from "@/lib/mock/store";
 
 export const runtime = "nodejs";
+export const maxDuration = 15;
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 export const fetchCache = "force-no-store";
 
-const handler = createMockHandler(createRuntimeStore);
+// `after` keeps log writes alive after the response on Vercel/serverless hosts.
+const handler = createMockHandler(createRuntimeStore, undefined, after);
 
 export {
   handler as GET,

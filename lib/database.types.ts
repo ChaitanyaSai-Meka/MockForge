@@ -23,7 +23,7 @@ export type Endpoint = {
   updated_at: string;
 };
 
-type RequestLog = {
+export type RequestLog = {
   id: string;
   endpoint_id: string;
   method: string;

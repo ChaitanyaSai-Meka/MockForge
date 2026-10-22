@@ -13,31 +13,38 @@ import { createClient } from "@/lib/supabase/server";
 import { requireUser } from "@/lib/auth";
 import Link from "next/link";
 import { MethodBadge } from "@/components/workspace-ui";
+import { RequestHistory } from "@/components/request-history";
+import { RefreshButton } from "@/components/refresh-button";
+import { getRequestHistory } from "@/lib/history";
 
 export default async function DashboardPage() {
   // Pages and layouts may render in parallel; guard the data read itself.
   await requireUser();
   const supabase = await createClient();
 
-  const [projectsResult, endpointsResult, logsResult, recentResult] =
-    await Promise.all([
-      supabase
-        .from("mock_projects")
-        .select("id", { count: "exact", head: true }),
-      supabase
-        .from("mock_endpoints")
-        .select("id", { count: "exact", head: true }),
-      supabase
-        .from("request_logs")
-        .select("id", { count: "exact", head: true }),
-      supabase
-        .from("mock_endpoints")
-        .select(
-          "id, project_id, method, path, is_active, updated_at, mock_projects(name, slug)",
-        )
-        .order("updated_at", { ascending: false })
-        .limit(5),
-    ]);
+  const [
+    projectsResult,
+    endpointsResult,
+    logsResult,
+    recentResult,
+    historyResult,
+  ] = await Promise.all([
+    supabase.from("mock_projects").select("id", { count: "exact", head: true }),
+    supabase
+      .from("mock_endpoints")
+      .select("id", { count: "exact", head: true }),
+    supabase.from("request_logs").select("id", { count: "exact", head: true }),
+    supabase
+      .from("mock_endpoints")
+      .select(
+        "id, project_id, method, path, is_active, updated_at, mock_projects(name, slug)",
+      )
+      .order("updated_at", { ascending: false })
+      .limit(5),
+    getRequestHistory()
+      .then((history) => ({ history, error: false as const }))
+      .catch(() => ({ history: null, error: true as const })),
+  ]);
 
   const hasDatabaseError = Boolean(
     projectsResult.error ||
@@ -190,6 +197,36 @@ export default async function DashboardPage() {
               View projects →
             </Link>
           </div>
+        )}
+      </section>
+
+      <section className="mt-6" aria-labelledby="recent-requests-heading">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <h2
+            id="recent-requests-heading"
+            className="text-sm font-semibold text-slate-200"
+          >
+            Recent requests
+          </h2>
+          <div className="flex items-center gap-4">
+            <Link
+              href="/dashboard/activity"
+              className="text-sm text-emerald-300 hover:underline"
+            >
+              View all
+            </Link>
+            <RefreshButton />
+          </div>
+        </div>
+        {historyResult.error ? (
+          <p
+            role="status"
+            className="rounded-xl border border-white/10 p-5 text-sm text-slate-400"
+          >
+            Request history could not be loaded. Try refreshing.
+          </p>
+        ) : (
+          <RequestHistory records={historyResult.history.records.slice(0, 5)} />
         )}
       </section>
 

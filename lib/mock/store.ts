@@ -10,6 +10,13 @@ export function createRuntimeStore(): RuntimeStore {
   // This client never inherits a caller's Authorization header or auth cookies.
   const supabase = createAdminClient();
   return {
+    async insertLog(entry) {
+      const { error } = await supabase
+        .from("request_logs")
+        .insert(entry)
+        .abortSignal(AbortSignal.timeout(3_000));
+      if (error) throw new Error("Request logging unavailable.");
+    },
     async findProject(slug) {
       const { data, error } = await supabase
         .from("mock_projects")

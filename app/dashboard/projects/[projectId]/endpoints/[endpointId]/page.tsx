@@ -1,5 +1,9 @@
 import Link from "next/link";
 import { getEndpoint } from "@/lib/management";
+import { PAGE_SIZE } from "@/lib/management";
+import { getRequestHistory } from "@/lib/history";
+import { RequestHistory } from "@/components/request-history";
+import { RefreshButton } from "@/components/refresh-button";
 import { getSiteUrl } from "@/lib/utils";
 import { buildMockUrl, hasResponseBody } from "@/lib/validation";
 import { CopyButton } from "@/components/copy-button";
@@ -8,6 +12,7 @@ import { EndpointToggle } from "@/components/endpoint-toggle";
 import {
   formatDate,
   MethodBadge,
+  Pagination,
   secondaryButton,
   StatusBadge,
   SuccessNotice,
@@ -24,11 +29,12 @@ export default async function EndpointPage({
   searchParams,
 }: {
   params: Promise<{ projectId: string; endpointId: string }>;
-  searchParams: Promise<{ notice?: string }>;
+  searchParams: Promise<{ notice?: string; page?: string | string[] }>;
 }) {
   const { projectId, endpointId } = await params;
   const { project, endpoint } = await getEndpoint(projectId, endpointId);
-  const { notice } = await searchParams;
+  const { notice, page } = await searchParams;
+  const history = await getRequestHistory(endpoint.id, page);
   const base = `/dashboard/projects/${project.id}/endpoints/${endpoint.id}`;
   const url = buildMockUrl(getSiteUrl(), project.slug, endpoint.path);
   const json = JSON.stringify(endpoint.response_body, null, 2);
@@ -96,11 +102,31 @@ export default async function EndpointPage({
           <code>{`curl -X ${endpoint.method} '${url}'`}</code>
         </pre>
       </section>
-      <section className="mt-6 rounded-xl border border-dashed border-white/15 p-5">
-        <h2 className="text-sm font-semibold">Request history</h2>
-        <p className="mt-2 text-sm text-slate-400">
-          Request inspection will be available when request logging is enabled.
-        </p>
+      <section className="mt-6" aria-labelledby="request-history-heading">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 id="request-history-heading" className="text-sm font-semibold">
+              Request history
+            </h2>
+            <p className="mt-1 text-xs text-slate-400">
+              {history.count.toLocaleString()} recorded requests · newest first
+            </p>
+          </div>
+          <RefreshButton />
+        </div>
+        <RequestHistory records={history.records} page={history.page} />
+        <Pagination
+          page={history.page}
+          count={history.count}
+          pageSize={PAGE_SIZE}
+          href={base}
+        />
+        <Link
+          className="mt-4 inline-block text-sm text-emerald-300 hover:underline"
+          href={`/dashboard/activity?endpoint=${endpoint.id}`}
+        >
+          Open in activity →
+        </Link>
       </section>
       <div className="mt-8 flex flex-col justify-between gap-5 border-t border-white/10 pt-6 sm:flex-row">
         <div>

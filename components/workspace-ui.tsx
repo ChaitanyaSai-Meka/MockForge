@@ -115,6 +115,7 @@ export function Pagination({
   href: string;
 }) {
   const pages = Math.max(1, Math.ceil(count / pageSize));
+  const separator = href.includes("?") ? "&" : "?";
   if (pages === 1 && page === 1) return null;
   return (
     <nav
@@ -126,12 +127,18 @@ export function Pagination({
       </span>
       <div className="flex gap-2">
         {page > 1 ? (
-          <Link className={secondaryButton} href={`${href}?page=${page - 1}`}>
+          <Link
+            className={secondaryButton}
+            href={`${href}${separator}page=${page - 1}`}
+          >
             Previous
           </Link>
         ) : null}
         {page < pages ? (
-          <Link className={secondaryButton} href={`${href}?page=${page + 1}`}>
+          <Link
+            className={secondaryButton}
+            href={`${href}${separator}page=${page + 1}`}
+          >
             Next
           </Link>
         ) : null}
@@ -140,11 +147,11 @@ export function Pagination({
   );
 }
 
-export function formatDate(value: string): string {
+export function formatDate(value: string, includeSeconds = false): string {
   return (
     new Intl.DateTimeFormat("en", {
       dateStyle: "medium",
-      timeStyle: "short",
+      timeStyle: includeSeconds ? "medium" : "short",
       timeZone: "UTC",
     }).format(new Date(value)) + " UTC"
   );

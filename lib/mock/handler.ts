@@ -1,6 +1,13 @@
 import type { Endpoint } from "@/lib/database.types";
 import { hasResponseBody, HTTP_METHODS } from "@/lib/validation";
 import { preflightHeaders, resolveMockTarget } from "@/lib/mock/request";
+import {
+  recordRequest,
+  requestDuration,
+  safeQueryParams,
+  type LogScheduler,
+  type RequestLogInput,
+} from "@/lib/mock/logging";
 
 export type RuntimeEndpoint = Pick<
   Endpoint,
@@ -8,6 +15,7 @@ export type RuntimeEndpoint = Pick<
 >;
 
 export type RuntimeStore = {
+  insertLog: (entry: RequestLogInput) => Promise<void>;
   findProject: (slug: string) => Promise<{ id: string } | null>;
   findEndpoints: (
     projectId: string,
@@ -73,12 +81,22 @@ export function createMockHandler(
   createStore: () => RuntimeStore,
   reportFailure: () => void = () =>
     console.error("MockForge runtime lookup failed."),
+  scheduleLog?: LogScheduler,
 ) {
   return async function handleMockRequest(
     request: Request,
     context: MockRouteContext,
   ): Promise<Response> {
     const headers = responseHeaders();
+    const started = performance.now();
+    const createdAt = new Date().toISOString();
+    let recording:
+      { store: RuntimeStore; endpointId: string; path: string } | undefined;
+    let responseStatus = 503;
+    const respond = (response: Response) => {
+      responseStatus = response.status;
+      return response;
+    };
     if (request.method === "OPTIONS") {
       headers.set(
         "Vary",
@@ -121,12 +139,21 @@ export function createMockHandler(
         project.id,
         resolved.target.path,
       );
+      const endpoint = endpoints.find(
+        (candidate) => candidate.method === request.method,
+      );
+      if (endpoint)
+        recording = {
+          store,
+          endpointId: endpoint.id,
+          path: `/mock/${resolved.target.slug}${resolved.target.path === "/" ? "" : resolved.target.path}`,
+        };
       const methods = HTTP_METHODS.filter((method) =>
         endpoints.some(
           (endpoint) => endpoint.method === method && endpoint.is_active,
         ),
       );
-      if (methods.length === 0) return notFound(request, headers);
+      if (methods.length === 0) return respond(notFound(request, headers));
 
       if (request.method === "OPTIONS") {
         const requestedMethod = request.headers.get(
@@ -166,11 +193,8 @@ export function createMockHandler(
         return new Response(null, { status: 204, headers });
       }
 
-      const endpoint = endpoints.find(
-        (candidate) => candidate.method === request.method,
-      );
       if (!endpoint) return methodNotAllowed(request, methods, headers);
-      if (!endpoint.is_active) return notFound(request, headers);
+      if (!endpoint.is_active) return respond(notFound(request, headers));
       if (
         !Number.isInteger(endpoint.status_code) ||
         endpoint.status_code < 200 ||
@@ -180,13 +204,17 @@ export function createMockHandler(
       }
 
       if (!hasResponseBody(endpoint.status_code)) {
-        return new Response(null, { status: endpoint.status_code, headers });
+        return respond(
+          new Response(null, { status: endpoint.status_code, headers }),
+        );
       }
       headers.set("Content-Type", "application/json; charset=utf-8");
-      return Response.json(endpoint.response_body, {
-        status: endpoint.status_code,
-        headers,
-      });
+      return respond(
+        Response.json(endpoint.response_body, {
+          status: endpoint.status_code,
+          headers,
+        }),
+      );
     } catch {
       // Do not emit request URLs, headers, credentials, or provider messages.
       reportFailure();
@@ -197,6 +225,22 @@ export function createMockHandler(
         "Mock responses are temporarily unavailable. Please try again.",
         headers,
       );
+    } finally {
+      if (recording) {
+        await recordRequest(
+          recording.store.insertLog,
+          {
+            endpoint_id: recording.endpointId,
+            method: request.method,
+            requested_path: recording.path,
+            query_params: safeQueryParams(request.url),
+            status_code: responseStatus,
+            duration_ms: requestDuration(started, performance.now()),
+            created_at: createdAt,
+          },
+          scheduleLog,
+        );
+      }
     }
   };
 }

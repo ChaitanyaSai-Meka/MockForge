@@ -9,7 +9,11 @@ const configured: RuntimeEndpoint = {
   response_body: { products: [{ id: 1, name: "Keyboard" }] },
   is_active: true,
 };
-const store = { findProject: vi.fn(), findEndpoints: vi.fn() };
+const store = {
+  findProject: vi.fn(),
+  findEndpoints: vi.fn(),
+  insertLog: vi.fn(),
+};
 const createStore = vi.fn(() => store);
 const reportFailure = vi.fn();
 const handler = createMockHandler(createStore, reportFailure);
@@ -31,6 +35,7 @@ function call(
 }
 
 beforeEach(() => {
+  store.insertLog.mockResolvedValue(undefined);
   store.findProject.mockResolvedValue({ id: "project-private-id" });
   store.findEndpoints.mockResolvedValue([configured]);
 });
@@ -318,5 +323,80 @@ describe("runtime failure handling", () => {
       { ...configured, response_body: undefined as unknown as Json },
     ]);
     expect((await call()).status).toBe(503);
+  });
+});
+
+describe("request history integration", () => {
+  it("records the configured response metadata but not incoming secrets", async () => {
+    await call(
+      "GET",
+      "/mock/demo/products/?page=2&token=secret&anything=secret",
+      { authorization: "Bearer secret", cookie: "secret" },
+    );
+    expect(store.insertLog).toHaveBeenCalledOnce();
+    const entry = store.insertLog.mock.calls[0][0];
+    expect(entry).toEqual({
+      endpoint_id: configured.id,
+      method: "GET",
+      requested_path: "/mock/demo/products",
+      query_params: { page: "2" },
+      status_code: 200,
+      duration_ms: expect.any(Number),
+      created_at: expect.any(String),
+    });
+    expect(entry.duration_ms).toBeGreaterThanOrEqual(0);
+    expect(Number.isNaN(Date.parse(entry.created_at))).toBe(false);
+    expect(JSON.stringify(entry)).not.toContain("secret");
+  });
+  it.each([204, 205, 304, 422, 599])(
+    "records configured HTTP %s",
+    async (status_code) => {
+      store.findEndpoints.mockResolvedValue([{ ...configured, status_code }]);
+      expect((await call()).status).toBe(status_code);
+      expect(store.insertLog).toHaveBeenCalledWith(
+        expect.objectContaining({ status_code }),
+      );
+    },
+  );
+  it("records a matched inactive endpoint's 404", async () => {
+    store.findEndpoints.mockResolvedValue([
+      { ...configured, is_active: false },
+    ]);
+    expect((await call()).status).toBe(404);
+    expect(store.insertLog).toHaveBeenCalledWith(
+      expect.objectContaining({ endpoint_id: configured.id, status_code: 404 }),
+    );
+  });
+  it("records a resolved endpoint's runtime error as 503", async () => {
+    store.findEndpoints.mockResolvedValue([
+      { ...configured, status_code: 100 },
+    ]);
+    expect((await call()).status).toBe(503);
+    expect(store.insertLog).toHaveBeenCalledWith(
+      expect.objectContaining({ status_code: 503 }),
+    );
+  });
+  it("does not attribute preflights or unsupported methods to another endpoint", async () => {
+    await call("OPTIONS");
+    await call("HEAD");
+    await call("POST");
+    expect(store.insertLog).not.toHaveBeenCalled();
+  });
+  it("does not log unknown projects or paths", async () => {
+    store.findProject.mockResolvedValueOnce(null);
+    await call();
+    store.findEndpoints.mockResolvedValueOnce([]);
+    await call();
+    expect(store.insertLog).not.toHaveBeenCalled();
+  });
+  it("returns the valid response unchanged when inserting the log fails", async () => {
+    store.insertLog.mockRejectedValueOnce(new Error("private database detail"));
+    const diagnostic = vi.spyOn(console, "error").mockImplementation(() => {});
+    const response = await call();
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(configured.response_body);
+    expect(diagnostic).toHaveBeenCalledExactlyOnceWith(
+      "MockForge request logging failed.",
+    );
   });
 });

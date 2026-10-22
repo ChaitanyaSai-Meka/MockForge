@@ -10,6 +10,7 @@ import { createRuntimeStore } from "@/lib/mock/store";
 
 function query(result: unknown) {
   const builder = {
+    insert: vi.fn().mockReturnThis(),
     select: vi.fn().mockReturnThis(),
     eq: vi.fn().mockReturnThis(),
     limit: vi.fn().mockReturnThis(),
@@ -23,6 +24,39 @@ function query(result: unknown) {
 
 beforeEach(() => {
   mocks.createAdminClient.mockReset();
+});
+
+it("writes minimal logs through the server-only client with a timeout", async () => {
+  const builder = query({ error: null });
+  const from = vi.fn().mockReturnValue(builder);
+  mocks.createAdminClient.mockReturnValue({ from });
+  const entry = {
+    endpoint_id: "endpoint",
+    method: "GET",
+    requested_path: "/mock/demo",
+    status_code: 200,
+    duration_ms: 1,
+  };
+  await createRuntimeStore().insertLog(entry);
+  expect(from).toHaveBeenCalledWith("request_logs");
+  expect(builder.insert).toHaveBeenCalledExactlyOnceWith(entry);
+  expect(builder.abortSignal).toHaveBeenCalledWith(expect.any(AbortSignal));
+});
+
+it("does not expose provider errors from log inserts", async () => {
+  const builder = query({ error: { message: "secret" } });
+  mocks.createAdminClient.mockReturnValue({
+    from: vi.fn().mockReturnValue(builder),
+  });
+  await expect(
+    createRuntimeStore().insertLog({
+      endpoint_id: "endpoint",
+      method: "GET",
+      requested_path: "/mock/demo",
+      status_code: 200,
+      duration_ms: 1,
+    }),
+  ).rejects.toThrow("Request logging unavailable.");
 });
 
 it("reads a project by exact slug and only selects its ID", async () => {

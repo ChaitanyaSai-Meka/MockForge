@@ -8,6 +8,7 @@ const navigation = [
   { label: "Overview", href: "/dashboard", icon: LayoutDashboard },
   { label: "Projects", href: "/dashboard/projects", icon: FolderKanban },
   { label: "Endpoints", href: "/dashboard/endpoints", icon: Braces },
+  { label: "Activity", href: "/dashboard/activity", icon: Activity },
 ];
 
 export function DashboardNavigation() {
@@ -34,14 +35,6 @@ export function DashboardNavigation() {
           </Link>
         );
       })}
-      <span
-        aria-disabled="true"
-        className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-slate-500"
-      >
-        <Activity className="size-4" />
-        Activity
-        <span className="ml-auto font-mono text-[9px] uppercase">Soon</span>
-      </span>
     </nav>
   );
 }
