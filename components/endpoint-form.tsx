@@ -140,8 +140,7 @@ export function EndpointForm({
           {url ?? "Enter a valid path to preview the URL."}
         </p>
         <p className="mt-2 text-xs text-slate-500">
-          Mock serving is coming soon. Anyone with this URL will be able to
-          access its response.
+          Once saved and active, anyone with this URL can access its response.
         </p>
       </div>
       <div className="grid items-start gap-5 sm:grid-cols-2">
@@ -181,7 +180,7 @@ export function EndpointForm({
           <span>
             <span className="text-sm font-medium">Active endpoint</span>
             <span className="mt-1 block text-xs leading-5 text-slate-400">
-              Inactive endpoints will return 404 when serving is enabled.
+              Inactive endpoints return 404.
             </span>
           </span>
         </label>

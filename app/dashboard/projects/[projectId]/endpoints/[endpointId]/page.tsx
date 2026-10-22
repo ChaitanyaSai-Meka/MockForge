@@ -65,8 +65,9 @@ export default async function EndpointPage({
           <CopyButton value={url} />
         </div>
         <p className="mt-4 text-xs leading-5 text-amber-200/80">
-          This configuration is saved. Mock serving is coming soon. Anyone with
-          the URL will be able to access the configured response.
+          {endpoint.is_active
+            ? "This endpoint is live. Anyone with the URL can access its response; no authentication is required."
+            : "This endpoint is inactive and returns 404. Enable it to serve the saved response publicly."}
         </p>
       </section>
       <section className="mt-6 overflow-hidden rounded-xl border border-white/10 bg-[#0c1117]">
