@@ -2,8 +2,7 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
-  // Let mock requests with a trailing slash reach our normalizer directly,
-  // including CORS preflights that must not be redirected first.
+  // Route trailing slashes directly so CORS preflights aren't redirected.
   skipTrailingSlashRedirect: true,
 };
 

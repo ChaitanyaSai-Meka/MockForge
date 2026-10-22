@@ -353,10 +353,6 @@ test("real project and endpoint CRUD, mobile controls, and cross-user isolation"
 });
 
 test("JSON null responses and database path constraints", async ({ page }) => {
-  test.skip(
-    process.env.MOCKFORGE_PHASE2_MIGRATION_APPLIED !== "true",
-    "Apply 20261023120000_endpoint_configuration.sql and set MOCKFORGE_PHASE2_MIGRATION_APPLIED=true to run this check.",
-  );
   const {
     users: [owner],
     cleanup,

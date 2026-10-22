@@ -6,7 +6,6 @@ export type ActionState = {
 
 export const initialActionState: ActionState = { status: "idle" };
 
-// Only public, actionable messages cross the server/client boundary.
 export function mutationError(
   code?: string,
   entity: "project" | "endpoint" = "project",

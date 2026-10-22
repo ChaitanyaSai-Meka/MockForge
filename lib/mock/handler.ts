@@ -44,7 +44,6 @@ function jsonError(
   headers: Headers,
 ) {
   headers.set("Content-Type", "application/json; charset=utf-8");
-  // HEAD uses the same status/headers as other errors, but cannot carry a body.
   const body =
     request.method === "HEAD"
       ? null
@@ -132,9 +131,7 @@ export function createMockHandler(
       const project = await store.findProject(resolved.target.slug);
       if (!project) return notFound(request, headers);
 
-      // There are at most five rows for one path (unique project/method/path).
-      // Read the method availability and response together to avoid resolving
-      // one configuration and returning a different one during an edit.
+      // One bounded read keeps method availability and response data consistent.
       const endpoints = await store.findEndpoints(
         project.id,
         resolved.target.path,

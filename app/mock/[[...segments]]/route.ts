@@ -18,7 +18,6 @@ export {
   handler as PATCH,
   handler as DELETE,
   handler as OPTIONS,
-  // Override Next.js's implicit HEAD-to-GET fallback: only the five configured
-  // methods are callable; HEAD receives the same 404/405 status without a body.
+  // Disable Next.js's implicit HEAD-to-GET fallback for exact method matching.
   handler as HEAD,
 };

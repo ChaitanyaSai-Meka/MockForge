@@ -1,11 +1,13 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
-import { getSupabasePublicConfig, isSupabaseConfigured } from "@/lib/supabase/config";
+import {
+  getSupabasePublicConfig,
+  isSupabaseConfigured,
+} from "@/lib/supabase/config";
 
 export async function updateSession(request: NextRequest) {
   let response = NextResponse.next({ request });
-  // Auth pages can explain missing setup without taking down the application.
   if (!isSupabaseConfigured()) return response;
 
   const { url, publishableKey } = getSupabasePublicConfig();
@@ -41,7 +43,6 @@ export async function updateSession(request: NextRequest) {
     },
   });
 
-  // getUser validates the session with Supabase Auth and refreshes it if needed.
   await supabase.auth.getUser();
   response.headers.set("Cache-Control", "private, no-store");
 

@@ -25,8 +25,7 @@ export function resolveMockTarget(
       },
     };
   }
-  // Next.js decodes route params. Check the raw pathname as well so encoded
-  // slashes or characters cannot become aliases for a different stored path.
+  // Reject encoded aliases before using Next.js's decoded route parameters.
   if (parsedUrl.pathname.includes("%")) {
     return {
       error: {
@@ -74,8 +73,7 @@ export function resolveMockTarget(
   return { target: { slug, path: path.data } };
 }
 
-// Reflect header names only, never header values. Authorization must be named
-// explicitly for CORS; Access-Control-Allow-Headers: * does not cover it.
+// CORS requires an explicit Authorization header name; a wildcard does not cover it.
 export function preflightHeaders(value: string | null): string[] | null {
   if (!value) return [];
   if (value.length > 2048) return null;
