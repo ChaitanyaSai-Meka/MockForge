@@ -27,3 +27,7 @@ next-env.d.ts
 # Supabase local development
 supabase/.branches
 supabase/.temp
+
+# Browser test artifacts
+/test-results
+/playwright-report

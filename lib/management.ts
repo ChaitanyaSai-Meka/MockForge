@@ -15,7 +15,12 @@ export async function findOwnedProject(
   projectId: string,
   ownerId: string,
 ) {
-  return supabase.from("mock_projects").select("*").eq("id", projectId).eq("owner_id", ownerId).maybeSingle();
+  return supabase
+    .from("mock_projects")
+    .select("*")
+    .eq("id", projectId)
+    .eq("owner_id", ownerId)
+    .maybeSingle();
 }
 
 export async function getProject(projectId: string) {
@@ -31,8 +36,12 @@ export async function getEndpoint(projectId: string, endpointId: string) {
   const project = await getProject(projectId);
   if (!idSchema.safeParse(endpointId).success) notFound();
   const supabase = await createClient();
-  const { data, error } = await supabase.from("mock_endpoints").select("*")
-    .eq("id", endpointId).eq("project_id", project.id).maybeSingle();
+  const { data, error } = await supabase
+    .from("mock_endpoints")
+    .select("*")
+    .eq("id", endpointId)
+    .eq("project_id", project.id)
+    .maybeSingle();
   if (error) throw new Error("Unable to load this endpoint. Please try again.");
   if (!data) notFound();
   return { project, endpoint: data };

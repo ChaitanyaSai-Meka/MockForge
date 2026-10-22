@@ -1,4 +1,5 @@
-export type Json = string | number | boolean | null | { [key: string]: Json } | Json[];
+export type Json =
+  string | number | boolean | null | { [key: string]: Json } | Json[];
 
 export type Project = {
   id: string;
@@ -38,21 +39,40 @@ export type Database = {
     Tables: {
       mock_projects: {
         Row: Project;
-        Insert: Pick<Project, "owner_id" | "name" | "slug"> & Partial<Omit<Project, "owner_id" | "name" | "slug">>;
+        Insert: Pick<Project, "owner_id" | "name" | "slug"> &
+          Partial<Omit<Project, "owner_id" | "name" | "slug">>;
         Update: Partial<Project>;
         Relationships: [];
       };
       mock_endpoints: {
         Row: Endpoint;
-        Insert: Pick<Endpoint, "project_id" | "method" | "path"> & Partial<Omit<Endpoint, "project_id" | "method" | "path">>;
+        Insert: Pick<Endpoint, "project_id" | "method" | "path"> &
+          Partial<Omit<Endpoint, "project_id" | "method" | "path">>;
         Update: Partial<Endpoint>;
-        Relationships: [{ foreignKeyName: "mock_endpoints_project_id_fkey"; columns: ["project_id"]; isOneToOne: false; referencedRelation: "mock_projects"; referencedColumns: ["id"] }];
+        Relationships: [
+          {
+            foreignKeyName: "mock_endpoints_project_id_fkey";
+            columns: ["project_id"];
+            isOneToOne: false;
+            referencedRelation: "mock_projects";
+            referencedColumns: ["id"];
+          },
+        ];
       };
       request_logs: {
         Row: RequestLog;
-        Insert: Omit<RequestLog, "id" | "created_at" | "query_params"> & Partial<Pick<RequestLog, "id" | "created_at" | "query_params">>;
+        Insert: Omit<RequestLog, "id" | "created_at" | "query_params"> &
+          Partial<Pick<RequestLog, "id" | "created_at" | "query_params">>;
         Update: Partial<RequestLog>;
-        Relationships: [{ foreignKeyName: "request_logs_endpoint_id_fkey"; columns: ["endpoint_id"]; isOneToOne: false; referencedRelation: "mock_endpoints"; referencedColumns: ["id"] }];
+        Relationships: [
+          {
+            foreignKeyName: "request_logs_endpoint_id_fkey";
+            columns: ["endpoint_id"];
+            isOneToOne: false;
+            referencedRelation: "mock_endpoints";
+            referencedColumns: ["id"];
+          },
+        ];
       };
     };
     Views: { [_ in never]: never };

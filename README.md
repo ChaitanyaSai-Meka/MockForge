@@ -2,7 +2,7 @@
 
 MockForge is a developer-focused web application for creating persistent mock REST API endpoints without writing backend code. Users manage projects and JSON responses in a protected dashboard, while generated mock URLs remain publicly callable by frontend applications.
 
-Phase 1 establishes the production foundation: Next.js, the visual system, Supabase SSR authentication, the protected dashboard shell, the PostgreSQL schema, and row-level security. Project and endpoint management begins in Phase 2.
+Phases 1 and 2 implement the foundation and database-backed project/endpoint management: Supabase SSR authentication, owner-protected CRUD, JSON configuration, generated URL previews, and a responsive dashboard. Public mock serving begins in Phase 3; request logging and inspection follow in Phase 4. Generated URLs are not callable mock APIs yet.
 
 ## Architecture
 
@@ -28,7 +28,7 @@ The dashboard uses cookie-based Supabase sessions and verifies the current user 
 - Supabase PostgreSQL and Auth
 - `@supabase/ssr` for cookie-based sessions
 - Zod for server-side input validation
-- ESLint for static checks and Vitest for foundation tests
+- ESLint, Vitest for unit tests, and Playwright for live management tests
 
 ## Local setup
 
@@ -53,11 +53,11 @@ The dashboard uses cookie-based Supabase sessions and verifies the current user 
    NEXT_PUBLIC_SITE_URL=http://localhost:3000
    ```
 
-   Only the two public Supabase values and the site origin are needed for Phase 1. The service-role key is reserved for Phase 3; it can remain unset for now. Never rename it with a `NEXT_PUBLIC_` prefix or expose it to browser code. Use the API key labelled **Publishable** (or the legacy `anon` key) for the public client, never a secret or service-role key.
+   Normal Phase 1/2 application operations need only the two public Supabase values and the site origin. The server key is used for temporary account setup/cleanup in optional live tests and will power the Phase 3 public runtime. Never rename it with a `NEXT_PUBLIC_` prefix or expose it to browser code. Use the API key labelled **Publishable** (or the legacy `anon` key) for the public client, never a secret or service-role key.
 
    `NEXT_PUBLIC_SITE_URL` must be an HTTP(S) origin without a path. Set it explicitly in production; sign-up does not silently fall back to localhost there. Restart the dev server after editing environment variables, and rebuild after changing any `NEXT_PUBLIC_` value in production.
 
-4. Apply both database migrations. For a fresh CLI checkout, initialize the CLI configuration once, then link to the intended Supabase project:
+4. Apply the database migrations. For a fresh CLI checkout, initialize the CLI configuration once, then link to the intended Supabase project:
 
    ```bash
    npx supabase init
@@ -70,8 +70,9 @@ The dashboard uses cookie-based Supabase sessions and verifies the current user 
 
    - `supabase/migrations/20261022190000_initial_schema.sql`
    - `supabase/migrations/20261023090000_foundation_hardening.sql`
+   - `supabase/migrations/20261023120000_endpoint_configuration.sql`
 
-   If the initial migration was already applied, run only the hardening migration. It adds explicit role grants and tighter constraints without recreating tables. Existing endpoints with a 1xx status or JSON larger than 64 KiB must be corrected before that migration can succeed.
+   Run only migrations you have not already applied. If Phase 1 is set up, only the third migration is new. It preserves JSON `null` values sent through PostgREST and adds canonical path validation. Correct any existing noncanonical paths before applying it. The hardening migration requires existing endpoints to use statuses 200–599 and JSON within 64 KiB.
 
 5. Configure authentication in **Supabase Dashboard → Authentication → URL Configuration**:
 
@@ -99,7 +100,7 @@ Open [http://localhost:3000](http://localhost:3000).
 
 ## Database design and security
 
-The version-controlled migration creates:
+The version-controlled migrations create:
 
 - `mock_projects`: globally unique project slugs owned by an Auth user.
 - `mock_endpoints`: exact method-and-path configurations, unique within a project.
@@ -117,6 +118,22 @@ RLS is enabled on every application table:
 Endpoint responses are bounded to 64 KiB of JSONB text and final HTTP statuses 200–599. The future runtime must omit the response body for 204, 205, and 304 statuses. Query-parameter logs are bounded to 8 KiB. Secret filtering belongs in the Phase 4 log writer; JSONB storage alone does not redact secrets.
 
 The later public mock engine will use a server-only administrative client, which bypasses RLS solely for runtime lookup and logging.
+
+## Project and endpoint management
+
+- `/dashboard/projects`: paginated project list and project creation.
+- `/dashboard/projects/[projectId]`: project details, URL prefix, endpoints, editing, and confirmed deletion.
+- `/dashboard/projects/[projectId]/endpoints/new`: method, path, status, active state, and JSON response configuration.
+- `/dashboard/projects/[projectId]/endpoints/[endpointId]`: saved response preview, URL/JSON copying, edit, enable/disable, and confirmed deletion.
+- `/dashboard/endpoints`: paginated endpoint list across the owner's projects.
+
+Server Actions verify the authenticated user and constrain project mutations by owner. Every endpoint mutation first verifies the parent project and includes both project and endpoint IDs in its filters. All normal operations use the authenticated client, with RLS as an additional boundary. Unique constraints handle concurrent slug and method/path conflicts; visitors see inline errors rather than database details. Deleting a project also deletes its endpoints and request logs; both deletion forms require the current slug or method/path and verify that confirmation on the server.
+
+Shared Zod schemas validate forms in the browser and on the server. Project slugs are globally unique, lowercase, 3–63 characters, and changing one changes every URL in the project. Paths are case-sensitive, start with `/`, and allow URL-safe ASCII letters, digits, `_`, `-`, `.`, and `~` in slash-separated segments. Repeated and trailing slashes are normalized; `/` is the root endpoint. Dot segments, encoded characters, queries, wildcards, and dynamic parameters are rejected. List pages load 12 records at a time.
+
+JSON responses can be objects, arrays, strings, booleans, numbers, or `null`. Validation rejects NUL characters, malformed Unicode, non-finite numbers, unsafe integers (store large IDs as strings), nesting beyond 64 levels, and payloads larger than 64 KiB. The third migration converts PostgREST's SQL NULL representation into JSONB `null` before the column's NOT NULL check. HTTP 204, 205, and 304 keep the saved JSON for later edits, but their future runtime responses will have no body.
+
+URL previews use the canonical `NEXT_PUBLIC_SITE_URL`, project slug, and normalized path. The UI explicitly marks serving and request history as forthcoming; Phase 2 does not implement the mock route handler or fabricate request activity.
 
 ## Demo data
 
@@ -139,7 +156,26 @@ npm test
 npm run build
 ```
 
-The Vitest suite covers server-side login/sign-up validation, safe auth failure handling, sign-out, server-verified dashboard guards, confirmation routes, redirect safety, configuration, and refreshed cookie/cache-header propagation. It mocks Supabase Auth and does not prove live email delivery or database RLS behavior. Use `npm run test:watch` during development.
+The Vitest suite covers auth, configuration, JSON/path validation, method/status validation, duplicate handling, deletion confirmation, and mutation ownership checks. It mocks Supabase and does not establish live database behavior. Use `npm run test:watch` during development.
+
+### Live browser and RLS checks
+
+Use a test Supabase project with migrations applied and its keys in `.env.local`. Stop other Next.js servers for this checkout first because these checks build into the same `.next` directory. Then run:
+
+```bash
+npx playwright install chromium
+npm run test:e2e
+```
+
+The suite starts a production build on port 3100. It creates two temporary, preconfirmed Auth users with `mockforge-e2e-…@example.invalid` addresses, signs in through the UI, exercises real project/endpoint CRUD, verifies persistence and validation, checks copying/mobile controls, and attempts cross-user reads, writes, parent reassignment, and dashboard navigation. It deletes only its temporary users afterward, cascading their test projects and endpoints. The service key is used for fixture account management; actual CRUD and isolation checks use each user's session. Traces and videos are disabled to avoid recording authentication material.
+
+After applying the third migration, enable the additional JSON `null` and database path-constraint test:
+
+```bash
+MOCKFORGE_PHASE2_MIGRATION_APPLIED=true npm run test:e2e
+```
+
+Without that flag, this one test is explicitly skipped. Browser screenshots of test endpoint pages are stored in gitignored `test-results/`.
 
 `supabase/tests/rls.sql` exercises real database policies for two synthetic users: visibility, forged ownership, cross-user mutations, endpoint reassignment, log-write restrictions, anonymous access, non-RLS privileges, and cascading deletion. On a disposable/local Supabase database after migrations, run:
 
@@ -174,7 +210,33 @@ Alternatively, run the whole script as `postgres` in the SQL Editor of a disposa
 - On mobile, open the navigation and verify the sign-out control is reachable by keyboard.
 - Create a second user and verify that RLS prevents either account from reading the other's rows.
 
-The last RLS check can use the SQL suite above. CRUD, runtime response matching, and request-history end-to-end checks begin in later phases because those features are not implemented yet.
+The last RLS check can use the SQL suite or browser suite above. The user has manually verified live sign-up and authentication. Runtime response matching and request-history tests begin in later phases.
+
+## Phase 2 manual checklist
+
+- Create a project and verify its slug, description, and dashboard count.
+- Try the same slug again and confirm a readable error while entered values remain intact.
+- Edit a project; changing its slug must warn about URL changes and update endpoint URL previews.
+- Create a GET endpoint with a JSON object, then reload its detail page to confirm persistence.
+- Try invalid JSON, invalid paths/statuses, oversized JSON, and a duplicate method/path; verify inline errors.
+- Create a second method on the same path; it should be allowed.
+- Format and copy JSON, copy the generated URL, and inspect the saved status and active state.
+- Edit the method, path, status, and response; disable/enable and verify persistence after reload.
+- After the third migration, save a root-path endpoint with JSON `null` and inspect the saved value.
+- Open another user's project and endpoint URLs and try direct API mutations; access must be denied.
+- Cancel a delete dialog with Escape, reject incorrect confirmation text, then delete a test endpoint/project with correct confirmation.
+- Confirm project deletion removes its endpoints and updates the dashboard/list counts.
+- Check forms, lists, and navigation on a narrow mobile viewport.
+- Do not expect mock URLs to return configured data until Phase 3 is implemented; request history arrives in Phase 4.
+
+## Phase 2 verification record — October 23, 2026
+
+- Passed: ESLint, TypeScript checking, all 116 Vitest tests, and the production build.
+- Passed: the live Playwright management flow against Supabase, including project and endpoint creation/editing, duplicate validation, JSON persistence, clipboard actions, active toggles, mobile navigation, confirmed deletion, and project-to-endpoint cascade deletion.
+- Passed with separate authenticated users: cross-user project/endpoint reads and writes are blocked, endpoint reassignment to another user's project is rejected, and unauthorized dashboard detail/edit URLs show an unavailable state.
+- Temporary test accounts and their associated data were cleaned up after the runs. No user-created projects were used for testing.
+- Passed after applying `20261023120000_endpoint_configuration.sql`: the remaining live integration test saved and retrieved a JSON `null` response at the root endpoint path and confirmed that the database rejects dot-segment paths. Both Phase 2 browser tests have now passed in separate runs; no Phase 2 integration check remains skipped.
+- Public mock serving and request-history functionality remain scheduled for Phases 3 and 4.
 
 ## Vercel deployment
 
@@ -188,7 +250,7 @@ Vercel can use the default Next.js build command, `npm run build`.
 
 ## Phase roadmap
 
-- **Phase 1 — implemented:** foundation, design system, auth, database migrations, landing page, protected dashboard shell, and auth regression tests. Live Supabase verification requires the setup above.
-- **Phase 2:** database-backed project and endpoint CRUD, validation, URL generation, and endpoint details.
+- **Phase 1 — implemented:** foundation, design system, auth, database migrations, landing page, protected dashboard shell, and auth regression tests. Live authentication verified by the user.
+- **Phase 2 — implemented and verified:** database-backed project and endpoint CRUD, shared validation, URL previews, endpoint details, confirmation dialogs, pagination, and management tests. The third migration is applied; live JSON `null` persistence and database path constraints are verified.
 - **Phase 3:** public catch-all mock runtime, exact matching, CORS, configured responses, and consistent errors.
 - **Phase 4:** request inspector, automated tests, UX refinement, and deployment finalization.
