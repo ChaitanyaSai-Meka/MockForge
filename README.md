@@ -43,6 +43,7 @@ Populate `.env.local` using your Supabase project's API settings:
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Publishable key, or legacy `anon` key                         |
 | `SUPABASE_SERVICE_ROLE_KEY`            | Server-only key for mock lookups and request logging          |
 | `NEXT_PUBLIC_SITE_URL`                 | Canonical application origin; `http://localhost:3000` locally |
+| `CRON_SECRET`                          | Server-only secret for the production database keep-alive job |
 
 Keep `.env.local` out of version control. Never prefix the server key with `NEXT_PUBLIC_`. The site URL must be an HTTP(S) origin without a path, query, or credentials. Restart the development server after changing environment variables.
 
@@ -133,7 +134,7 @@ flowchart LR
   Admin --> DB
 ```
 
-Dashboard reads and mutations use authenticated clients with ownership checks and RLS. Only the public runtime uses the administrative client. Request logging runs through Next.js `after`; a logging failure never replaces the configured response.
+Dashboard reads and mutations use authenticated clients with ownership checks and RLS. The public runtime and protected database keep-alive job use the administrative client. Request logging runs through Next.js `after`; a logging failure never replaces the configured response.
 
 ```text
 app/          Pages, Server Actions, authentication, and mock routes
@@ -174,6 +175,16 @@ See [Testing and demo data](docs/testing.md) for fixture cleanup, RLS checks, an
 6. Verify authentication, a public mock call, browser CORS, and the resulting request log.
 
 The mock route uses the Node.js runtime with a 15-second duration budget. Keep support for Next.js `after`; this application cannot be deployed as a static export. Deployment Protection can block public API callers on preview URLs, so configure access deliberately. Use separate Supabase projects for testing and production.
+
+### Database keep-alive
+
+[vercel.json](vercel.json) schedules `GET /api/cron/keep-alive` daily at 00:00 UTC. The backend queries Supabase on alternating UTC days, giving a 48-hour target interval across month and year boundaries; intervening calls return `skipped: true` without contacting the database. Vercel's actual invocation time can vary, especially on the Hobby plan.
+
+Set `CRON_SECRET` to a random value of at least 32 characters in the Vercel project's **Production** environment variables, then redeploy. Vercel automatically includes it in the request's `Authorization: Bearer <CRON_SECRET>` header. Cron jobs run only on production deployments, not locally or in previews. On another host, configure a daily scheduler to call this route with the same header.
+
+The job performs an uncached, read-only query for at most one project ID with a five-second timeout. An empty table is still a successful database check; no project data is returned or written. Missing/incorrect authorization is rejected, and database failures return HTTP 503 and emit a generic server log. Check runs in **Vercel → Cron Jobs** after deployment.
+
+This activity is intended to reduce inactivity pauses; it cannot guarantee Supabase availability or restore an already paused project. Resume a paused project in Supabase first.
 
 ## Operational limits
 
